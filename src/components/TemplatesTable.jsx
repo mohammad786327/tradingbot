@@ -238,7 +238,7 @@ const TemplatesTable = ({ templates = [], onEdit, onDelete, onUpdateTemplates, f
                     const isSelected = selectedItems.has(template.id);
                     
                     // Extract values for Positions column
-                    const marginValue = template.margin || template.marginAmount || template.initialMargin || template.investment;
+                    const marginValue = template.margin || template.marginAmount || template.initialMargin || template.investment || template.entryAmount;
                     const margin = marginValue ? parseFloat(marginValue) : null;
                     
                     const leverageValue = template.leverage || template.leverageMultiplier;
