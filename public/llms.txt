@@ -1,0 +1,13 @@
+## Pages
+- [Admin Panel - CryptoBot](/admin): No description available
+- [Bot Trading - CryptoBot Trading Platform](/bottrading): Automated cryptocurrency trading with advanced bot strategies and real-time execution
+- [Candle Strike Bot - CryptoBot](/candlestrikebot): No description available
+- [Command Center - CryptoBot](/dashboard): Real-time cryptocurrency trading dashboard and command center
+- [DCA Trading Bot - CryptoBot](/dcatradingbot): No description available
+- [Grid Trading Bot - CryptoBot](/gridtradingbot): No description available
+- [Manual Trade - CryptoBot](/manualtrade): No description available
+- [Price Movement Bot - CryptoBot](/pricemovementbot): No description available
+- [RSI Trading Bot - CryptoBot](/rsitradingbot): No description available
+- [Settings - CryptoBot Trading Platform](/settings): Configure your trading platform settings and preferences
+- [Templates - CryptoBot](/templates): No description available
+- [Unified Positions - CryptoBot](/positions): View and manage all your crypto bot positions in one place.
