@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, ChevronUp, AlertTriangle, DollarSign, Activity, Zap, Info } from 'lucide-react';
@@ -10,6 +11,9 @@ import PriceMovementCoinSelector from './PriceMovementCoinSelector';
 import ActiveCoinsDisplay from './ActiveCoinsDisplay';
 import { AVAILABLE_MOVEMENT_COINS } from '@/utils/TemplateCoinsMapping';
 import { v4 as uuidv4 } from 'uuid';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '@/services/firebase';
+import { getAuth } from 'firebase/auth';
 
 const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPreviewSymbolsChange, onSettingsChange }) => {
   const { toast } = useToast();
@@ -23,7 +27,7 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
   const [mappingValid, setMappingValid] = useState(true);
   
   const [formData, setFormData] = useState({
-    dollarMovement: '50',
+    dollarMovement: '50', // This is the "amount" threshold for the trigger
     movementTimeframe: '1m',
     directionMode: 'Long', 
     cooldown: '30',
@@ -34,7 +38,6 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
   });
 
   // Filter out system templates if needed, or rely on propTemplates being correct.
-  // We'll trust propTemplates passed from parent, assuming parent filtered properly or we use all.
   const userTemplates = useMemo(() => {
     return propTemplates || [];
   }, [propTemplates]);
@@ -58,8 +61,6 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
         coins = selectedTemplate.mappings[selectedMovementCoin];
     } else if (selectedTemplate.symbols && Array.isArray(selectedTemplate.symbols)) {
         // Standard user template: Active coins = All template symbols
-        // Logic: Movement coin is the trigger, template symbols are the execution targets.
-        // We include all symbols defined in the template.
         coins = selectedTemplate.symbols;
     }
 
@@ -93,12 +94,17 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
     }
   }, [formData.dollarMovement, onSettingsChange]);
 
+  // Debugging: Log Amount Input Changes
+  useEffect(() => {
+    console.log(`[DEBUG] Amount Input Changed: ${formData.dollarMovement}`);
+  }, [formData.dollarMovement]);
+
   const handleTemplateChange = (e) => {
       const newTemplateId = e.target.value;
       setSelectedTemplateId(newTemplateId);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     // Validations
@@ -110,31 +116,55 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
          toast({ title: "Validation Error", description: "Invalid coin mapping. Please select a template with symbols.", variant: "destructive" });
          return;
     }
-    if (!formData.dollarMovement || isNaN(formData.dollarMovement)) {
-         toast({ title: "Validation Error", description: "Enter a valid dollar movement amount.", variant: "destructive" });
+    const amountThreshold = parseFloat(formData.dollarMovement);
+    if (!formData.dollarMovement || isNaN(amountThreshold) || amountThreshold <= 0) {
+         toast({ title: "Validation Error", description: "Enter a valid positive dollar movement amount.", variant: "destructive" });
         return;
     }
 
+    console.log("[DEBUG] Submitting Bot Config...");
+    console.log(`[DEBUG] Trigger Threshold: ${amountThreshold}`);
+
+    const auth = getAuth();
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+        toast({ title: "Authentication Error", description: "You must be logged in to create a bot.", variant: "destructive" });
+        return;
+    }
+
+    const botId = Date.now().toString();
+
     // Create bot configuration object
     const botConfig = {
-        id: Date.now().toString(),
+        id: botId,
+        uid: currentUser.uid, // Add User ID for security rules
         templateId: selectedTemplateId,
         templateName: selectedTemplate?.name || 'Unknown Strategy',
         movementCoin: selectedMovementCoin,
         symbols: activeCoins,
         ...formData,
+        dollarMovement: amountThreshold, // Ensure number type
+        
+        // Trigger State Initialization
+        hasTriggered: false,
+        lastTriggerTime: null,
+        
         status: 'ACTIVE',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
     };
 
+    console.log("[DEBUG] Bot Config Created:", botConfig);
+
     // Generate Initial Positions for each active coin
+    // These positions start as PENDING until the trigger condition is met
     const initialPositions = activeCoins.map(symbol => {
-        const entryPrice = 0; // Updated later
-        const dollarTarget = parseFloat(formData.dollarMovement);
-        const margin = dollarTarget;
-        
+        const entryPrice = 0; // Updated later when triggered
+        const margin = amountThreshold; 
+
         return {
             id: uuidv4(),
+            uid: currentUser.uid,
             botId: botConfig.id,
             botName: botConfig.templateName,
             symbol: symbol,
@@ -144,7 +174,7 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
             margin: margin,
             leverage: selectedTemplate?.leverage || 10,
             quantity: 0,
-            dollarTarget: dollarTarget,
+            dollarTarget: amountThreshold, // Used for progress tracking
             status: 'PENDING',
             progress: 0,
             unrealizedPnl: 0,
@@ -156,20 +186,44 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
         };
     });
 
-    onCreateBot(botConfig, initialPositions);
-    
-    addNotification(
-        NOTIFICATION_TYPES.BOT_STARTED,
-        "Price Movement Bot Started",
-        `Monitoring ${selectedMovementCoin} to trade ${activeCoins.length} pairs.`,
-        { botId: botConfig.id, strategy: 'Price Movement' }
-    );
-    
-    toast({
-        title: "Bot Created Successfully",
-        description: `Trigger: ${selectedMovementCoin} | Trades: ${activeCoins.length} Coins`,
-        className: "bg-green-500 border-green-600 text-white"
-    });
+    console.log(`[DEBUG] Created ${initialPositions.length} pending positions.`);
+
+    try {
+        // Save Bot to Firestore
+        await setDoc(doc(db, 'bots', botConfig.id), botConfig);
+        console.log("[DEBUG] Bot saved to Firestore 'bots' collection.");
+
+        // Save Positions to Firestore
+        // Note: Ideally use batch write, but keeping it simple for now as requested
+        for (const pos of initialPositions) {
+            await setDoc(doc(db, 'positions', pos.id), pos);
+        }
+        console.log("[DEBUG] Positions saved to Firestore 'positions' collection.");
+
+        // Call parent handler to update local state immediately
+        onCreateBot(botConfig, initialPositions);
+        
+        addNotification(
+            NOTIFICATION_TYPES.BOT_STARTED,
+            "Price Movement Bot Started",
+            `Monitoring ${selectedMovementCoin} to trade ${activeCoins.length} pairs.`,
+            { botId: botConfig.id, strategy: 'Price Movement' }
+        );
+        
+        toast({
+            title: "Bot Created Successfully",
+            description: `Trigger: ${selectedMovementCoin} | Trades: ${activeCoins.length} Coins`,
+            className: "bg-green-500 border-green-600 text-white"
+        });
+
+    } catch (error) {
+        console.error("[ERROR] Failed to save bot or positions:", error);
+        toast({
+            title: "Creation Failed",
+            description: "Could not save bot to database. Check console for details.",
+            variant: "destructive"
+        });
+    }
   };
 
   const DirectionToggle = useCallback(({ value, onChange }) => {
@@ -262,6 +316,8 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
                         <label className="block text-[10px] font-bold text-gray-500 mb-1.5">Dollar Movement (USDT)</label>
                         <input 
                             type="number" 
+                            step="0.01"
+                            min="0.01"
                             value={formData.dollarMovement}
                             onChange={(e) => setFormData(prev => ({...prev, dollarMovement: e.target.value}))}
                             className="w-full bg-[#1a1a1a] border border-[#2a2a2a] text-white text-sm font-bold rounded-lg px-3 py-2 focus:border-purple-500 outline-none"
@@ -418,7 +474,7 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
             )}
           >
              <Zap size={20} className="fill-current" />
-             <span>{(!mappingValid || activeCoins.length === 0) ? 'Invalid Configuration' : 'Create Bot.'}</span>
+             <span>{(!mappingValid || activeCoins.length === 0) ? 'Invalid Configuration' : 'Create Bot'}</span>
           </motion.button>
        </form>
     </div>

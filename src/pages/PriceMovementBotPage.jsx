@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Helmet } from 'react-helmet';
 import { motion } from 'framer-motion';
@@ -9,7 +10,10 @@ import ActivePositionsTablePriceMovement from '@/components/ActivePositionsTable
 import BotChartGrid from '@/components/BotChartGrid';
 import { useToast } from '@/components/ui/use-toast';
 import { binanceWS } from '@/utils/binanceWebSocket';
-import { useBotStatusMonitor } from '@/hooks/useBotStatusMonitor'; // Added Hook
+import { useBotStatusMonitor } from '@/hooks/useBotStatusMonitor'; 
+import { collection, query, where, onSnapshot, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { db } from '@/services/firebase';
+import { getAuth } from 'firebase/auth';
 
 const PriceMovementBotPage = () => {
   const { toast } = useToast();
@@ -25,26 +29,46 @@ const PriceMovementBotPage = () => {
   const [previewSettings, setPreviewSettings] = useState({ dollarMovement: 50 });
 
   const activeSubscriptionRef = useRef(null);
+  const botStateRef = useRef({}); // Refs to hold dynamic bot state for trigger logic
 
-  // --- NEW: Monitor Bot Status for Notifications ---
-  // Note: 'OPEN' corresponds to 'ACTIVE' for this specific bot type implementation
-  // We might need to normalize statuses or adjust hook. 
-  // Let's assume positions with 'OPEN' status are active.
+  // --- Monitor Bot Status for Notifications ---
   const monitorPositions = positions.map(p => ({
       ...p,
       status: p.status === 'OPEN' ? 'ACTIVE' : p.status
   }));
   useBotStatusMonitor(monitorPositions, 'Price Movement Bot');
-  // -------------------------------------------------
-
-  // Load initial data
+  
+  // 1. Initial Load from Firestore
   useEffect(() => {
+    const auth = getAuth();
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
+    const botsRef = collection(db, 'bots');
+    const qBots = query(botsRef, where('uid', '==', currentUser.uid), where('status', '==', 'ACTIVE'));
+
+    const unsubscribeBots = onSnapshot(qBots, (snapshot) => {
+        const loadedBots = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setBots(loadedBots);
+        // Update Ref for easy access in ws callback
+        loadedBots.forEach(b => {
+            botStateRef.current[b.id] = b;
+        });
+    });
+
+    const posRef = collection(db, 'positions');
+    const qPos = query(posRef, where('uid', '==', currentUser.uid));
+
+    const unsubscribePos = onSnapshot(qPos, (snapshot) => {
+        const loadedPos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setPositions(loadedPos);
+    });
+
     // Load Templates
     const storedTemplates = localStorage.getItem('tradingTemplates');
     if (storedTemplates) {
       setTemplates(JSON.parse(storedTemplates));
     } else {
-        // Fallback demo templates if no user templates exist
         const demoTemplates = [
             { id: 'tmpl_1', name: 'Alpha Scalper', symbols: ['BTCUSDT', 'ETHUSDT'], orderType: 'Scalping' },
             { id: 'tmpl_2', name: 'ETH Grid', symbols: ['ETHUSDT'], orderType: 'Grid' },
@@ -53,119 +77,162 @@ const PriceMovementBotPage = () => {
         setTemplates(demoTemplates);
     }
 
-    // Load Bots
-    const storedBots = localStorage.getItem('priceMovementBots');
-    if (storedBots) {
-      setBots(JSON.parse(storedBots));
-    }
-
-    // Load Positions
-    const storedPositions = localStorage.getItem('activePositions');
-    if (storedPositions) {
-        setPositions(JSON.parse(storedPositions));
-    } else {
-        // Initial Mock Data if nothing in storage
-        const mockPositions = [
-             {
-                id: '1',
-                botName: 'Volatility Scalper',
-                symbol: 'BNBUSDT',
-                entryPrice: 590.50,
-                currentPrice: 590.50,
-                margin: 50,
-                leverage: 10,
-                direction: 'Long',
-                status: 'OPEN',
-                dollarTarget: 50,
-                unrealizedPnl: 0,
-                pnlPercentage: 0,
-                progress: 0
-             }
-        ];
-        setPositions(mockPositions);
-    }
+    return () => {
+        unsubscribeBots();
+        unsubscribePos();
+    };
   }, []);
 
-  // Handle incoming navigation state
+  // 2. Real-time Price Updates, Trigger Logic & PnL
   useEffect(() => {
-    if (location.state?.selectedPositionId && positions.length > 0) {
-      const pos = positions.find(p => p.id === location.state.selectedPositionId);
-      if (pos) {
-        setSelectedPosition(pos);
-        if (location.state.highlight) {
-          toast({
-            title: "Bot Selected",
-            description: `Now monitoring ${pos.botName || pos.symbol}`,
-          });
-        }
-      }
-    }
-  }, [location.state, positions, toast]);
-
-  // Persist bots when changed
-  useEffect(() => {
-    localStorage.setItem('priceMovementBots', JSON.stringify(bots));
-  }, [bots]);
-
-  // Persist positions when changed
-  useEffect(() => {
-     localStorage.setItem('activePositions', JSON.stringify(positions));
-  }, [positions]);
-
-  // Real-time Price Updates and PnL Calculation
-  useEffect(() => {
-    if (positions.length === 0) return;
-
-    // Get unique symbols to subscribe to
-    const symbols = [...new Set(positions.filter(p => p.status !== 'CLOSED').map(p => p.symbol))];
+    const activePositionSymbols = positions.filter(p => p.status !== 'CLOSED').map(p => p.symbol);
+    const botTriggerSymbols = bots.map(b => b.movementCoin);
     
-    if (symbols.length === 0) return;
+    const allSymbols = [...new Set([...activePositionSymbols, ...botTriggerSymbols])];
+    
+    if (allSymbols.length === 0) return;
+    
+    const subscription = binanceWS.subscribe(allSymbols, 'kline_1m', '1m', async (data) => {
+        if (!data.s) return;
 
-    // Subscribe
-    const subscription = binanceWS.subscribe(symbols, 'ticker', '1m', (data) => {
-        if (!data.s || !data.c) return;
+        const symbol = data.s;
+        const currentPrice = parseFloat(data.c);
+        const openPrice = parseFloat(data.o); 
+        
+        // --- A. CHECK TRIGGERS (For Bots) ---
+        // Access latest bot state from ref to avoid closure staleness
+        const relevantBotIds = Object.keys(botStateRef.current).filter(id => botStateRef.current[id].movementCoin === symbol);
+        
+        for (const botId of relevantBotIds) {
+            const bot = botStateRef.current[botId];
+            if (!bot) continue;
 
+            const threshold = parseFloat(bot.dollarMovement);
+            const isLong = bot.directionMode === 'Long';
+            
+            const movement = currentPrice - openPrice;
+            
+            let isConditionMet = false;
+            if (isLong && movement >= threshold) isConditionMet = true;
+            if (!isLong && movement <= -threshold) isConditionMet = true;
+            
+            // Calculate Cooldown
+            const lastTrigger = bot.lastTriggerTime ? new Date(bot.lastTriggerTime).getTime() : 0;
+            const now = Date.now();
+            
+            let cooldownMs = 0;
+            const cooldownVal = parseFloat(bot.cooldown) || 0;
+            if (bot.cooldownUnit === 'Sec') cooldownMs = cooldownVal * 1000;
+            else if (bot.cooldownUnit === 'Min') cooldownMs = cooldownVal * 60 * 1000;
+            else if (bot.cooldownUnit === 'Hour') cooldownMs = cooldownVal * 60 * 60 * 1000;
+            
+            const timeSinceLast = now - lastTrigger;
+            const isCooldownActive = timeSinceLast < cooldownMs;
+
+            // Debug Logging
+            console.log(`Bot: ${bot.id} | Price: ${currentPrice} | Threshold: ${threshold} | HasTriggered: ${bot.hasTriggered} | LastTrigger: ${bot.lastTriggerTime} | SafetyPeriod: ${cooldownVal}${bot.cooldownUnit}`);
+
+            // RESET LOGIC: If price falls below threshold, reset the hasTriggered flag
+            if (!isConditionMet && bot.hasTriggered) {
+                console.log(`[RESET] Bot ${bot.id} trigger reset (Price pulled back)`);
+                // Update Firestore
+                updateDoc(doc(db, 'bots', bot.id), { hasTriggered: false });
+                
+                // Optimistic local update
+                botStateRef.current[bot.id] = { ...bot, hasTriggered: false };
+                continue;
+            }
+
+            // TRIGGER LOGIC
+            if (isConditionMet && !bot.hasTriggered) {
+                console.log(`[CHECK] Bot ${bot.id} trigger condition met. Checking cooldown...`);
+                console.log(`Safety period check: ${isCooldownActive ? 'ACTIVE' : 'EXPIRED'} | Time since last trigger: ${(timeSinceLast/1000).toFixed(1)}s | Cooldown req: ${(cooldownMs/1000).toFixed(1)}s`);
+
+                if (isCooldownActive) {
+                    console.log("Cooldown active, skipping trigger");
+                    // We DO NOT set hasTriggered = true here, allowing it to check again if price stays high after cooldown?
+                    // OR we set it to prevent spamming logs?
+                    // Requirement: "If elapsed time < safetyTimePeriod: SKIP trigger"
+                    // Requirement: "Only create position if hasTriggered = false"
+                    // If we skip, we just return. Next tick will check again.
+                    continue; 
+                }
+
+                console.log("Cooldown expired, trigger allowed");
+
+                // Execute Trigger
+                const pendingPositions = positions.filter(p => p.botId === bot.id && p.status === 'PENDING');
+                
+                if (pendingPositions.length > 0) {
+                    console.log(`[TRIGGER] Bot ${bot.id} triggered! ${symbol} moved ${movement.toFixed(2)} (>${threshold})`);
+                    
+                    const updates = pendingPositions.map(p => {
+                       return updateDoc(doc(db, 'positions', p.id), {
+                           status: 'ACTIVE', 
+                           entryPrice: 0, 
+                           activatedAt: new Date().toISOString()
+                       });
+                    });
+                    
+                    // Update Bot State in Firestore
+                    await updateDoc(doc(db, 'bots', bot.id), { 
+                        hasTriggered: true,
+                        lastTriggerTime: new Date().toISOString()
+                    });
+                    
+                    // Optimistic update
+                    botStateRef.current[bot.id] = { 
+                        ...bot, 
+                        hasTriggered: true, 
+                        lastTriggerTime: new Date().toISOString() 
+                    };
+
+                    await Promise.all(updates);
+                    toast({
+                        title: "Bot Triggered!",
+                        description: `${bot.templateName} activated on ${symbol} movement.`,
+                        className: "bg-purple-600 text-white"
+                    });
+                } else {
+                    // Even if no positions pending (maybe max trades reached?), we should update bot state to avoid infinite loop
+                     await updateDoc(doc(db, 'bots', bot.id), { hasTriggered: true });
+                     botStateRef.current[bot.id] = { ...bot, hasTriggered: true };
+                }
+            } else if (isConditionMet && bot.hasTriggered) {
+                 console.log("Trigger blocked - already triggered");
+            }
+        }
+
+        // --- B. UPDATE POSITIONS (PnL) ---
         setPositions(prevPositions => {
             return prevPositions.map(pos => {
-                if (pos.symbol === data.s && pos.status !== 'CLOSED') {
-                    const currentPrice = parseFloat(data.c);
-                    const entryPrice = parseFloat(pos.entryPrice) || currentPrice; 
-                    const isLong = pos.direction === 'Long';
+                if (pos.symbol === symbol && (pos.status === 'ACTIVE' || pos.status === 'OPEN')) {
                     
-                    // If entryPrice is 0 (just created), set it to current price
-                    const effectiveEntryPrice = entryPrice > 0 ? entryPrice : currentPrice;
-                    
-                    // PnL Calculation
-                    const priceDiff = currentPrice - effectiveEntryPrice;
-                    const pnlRaw = isLong ? priceDiff : -priceDiff;
-                    // Quantity estimation: (Margin * Leverage) / EntryPrice
-                    const quantity = (parseFloat(pos.margin) * (parseFloat(pos.leverage) || 1)) / effectiveEntryPrice;
-                    const unrealizedPnl = pnlRaw * quantity;
-                    
-                    const pnlPercentage = (pnlRaw / effectiveEntryPrice) * 100 * (parseFloat(pos.leverage) || 1);
-                    
-                    // Price Change % for Badge
-                    const priceChangePercent = ((currentPrice - effectiveEntryPrice) / effectiveEntryPrice) * 100;
+                    let effectiveEntry = pos.entryPrice;
+                    if (!effectiveEntry || effectiveEntry === 0) {
+                        effectiveEntry = currentPrice;
+                    }
 
-                    // Progress (towards target profit dollar amount)
+                    const isLong = pos.direction === 'Long';
+                    const priceDiff = currentPrice - effectiveEntry;
+                    const pnlRaw = isLong ? priceDiff : -priceDiff;
+                    
+                    const leverage = parseFloat(pos.leverage) || 1;
+                    const quantity = (parseFloat(pos.margin) * leverage) / effectiveEntry;
+                    
+                    const unrealizedPnl = pnlRaw * quantity;
+                    const pnlPercentage = (pnlRaw / effectiveEntry) * 100 * leverage;
+                    
                     const dollarTarget = parseFloat(pos.dollarTarget) || 50;
                     const progress = Math.max(0, (unrealizedPnl / dollarTarget) * 100);
-
-                    // Auto-Open if Pending and price moves (Simulated logic)
-                    let status = pos.status;
-                    if (status === 'PENDING' && Math.abs(pnlPercentage) > 0.1) {
-                        status = 'OPEN';
-                    }
 
                     return {
                         ...pos,
                         currentPrice: currentPrice,
-                        entryPrice: effectiveEntryPrice,
+                        entryPrice: effectiveEntry,
                         unrealizedPnl,
                         pnlPercentage,
-                        priceChangePercent,
-                        progress,
-                        status
+                        progress
                     };
                 }
                 return pos;
@@ -180,64 +247,55 @@ const PriceMovementBotPage = () => {
             binanceWS.unsubscribe(activeSubscriptionRef.current);
         }
     };
-  }, [positions.length]); // Re-subscribe if number of positions changes
+  }, [bots, positions.length]); // Re-run if bots or position count changes significantly
 
 
   const handleCreateBot = useCallback((newBot, newPositions) => {
-    setBots(prev => [...prev, newBot]);
-    
-    if (newPositions && newPositions.length > 0) {
-        setPositions(prev => [...newPositions, ...prev]);
-        toast({
-            title: "Positions Created",
-            description: `Started ${newPositions.length} new position trackers.`
-        });
-    }
-  }, [toast]);
+    // State updates handled by Firestore listener
+  }, []);
 
-  const handleClosePosition = (position) => {
+  const handleClosePosition = async (position) => {
      if (window.confirm(`Are you sure you want to close the position for ${position.symbol}?`)) {
-         setPositions(prev => prev.map(p => 
-             p.id === position.id ? { ...p, status: 'CLOSED', unrealizedPnl: p.unrealizedPnl } : p
-         ));
-         toast({ title: "Position Closed", description: `${position.symbol} position has been closed.` });
+         try {
+             await updateDoc(doc(db, 'positions', position.id), {
+                 status: 'CLOSED',
+                 closedAt: new Date().toISOString(),
+                 finalPnl: position.unrealizedPnl
+             });
+             toast({ title: "Position Closed", description: `${position.symbol} position has been closed.` });
+         } catch (e) {
+             console.error("Error closing position:", e);
+             toast({ title: "Error", description: "Failed to close position", variant: "destructive" });
+         }
      }
   };
 
-  const handleDeletePosition = (position) => {
-      if (window.confirm("Delete this position from history?")) {
-          setPositions(prev => prev.filter(p => p.id !== position.id));
-          toast({ title: "Position Deleted", variant: "destructive" });
-      }
+  const handleDeletePosition = async (position) => {
+      toast({ title: "Info", description: "Deletion enabled in admin panel only." });
   };
 
   const handleViewHistory = (position) => {
       toast({ 
           title: "Trade History", 
-          description: `History view for ${position.symbol} is coming soon! Entry: $${position.entryPrice}` 
+          description: `Entry: $${position.entryPrice?.toFixed(2) || 'N/A'}` 
       });
   };
 
   const handleCardClick = (mode) => {
-      if (filterMode === mode || mode === 'total') {
-          setFilterMode(null);
-      } else {
-          setFilterMode(mode);
-      }
+      setFilterMode(prev => prev === mode ? null : mode);
   };
 
   // Filter positions for table
   const filteredPositions = positions.filter(p => {
       if (!filterMode) return true;
-      if (filterMode === 'active') return p.status === 'OPEN' || p.status === 'ACTIVE';
+      if (filterMode === 'active') return p.status === 'ACTIVE' || p.status === 'OPEN';
       if (filterMode === 'pending') return p.status === 'PENDING';
       if (filterMode === 'profit') return (p.unrealizedPnl || 0) > 0;
       if (filterMode === 'loss') return (p.unrealizedPnl || 0) < 0;
       return true;
   });
 
-  // Calculate stats for counters
-  const activeCount = positions.filter(p => p.status === 'OPEN' || p.status === 'ACTIVE').length;
+  const activeCount = positions.filter(p => p.status === 'ACTIVE' || p.status === 'OPEN').length;
   const pendingCount = positions.filter(p => p.status === 'PENDING').length;
   const totalProfit = positions.reduce((acc, p) => (p.unrealizedPnl || 0) > 0 ? acc + (p.unrealizedPnl || 0) : acc, 0);
   const totalLoss = positions.reduce((acc, p) => (p.unrealizedPnl || 0) < 0 ? acc + (p.unrealizedPnl || 0) : acc, 0);
@@ -272,7 +330,6 @@ const PriceMovementBotPage = () => {
       </Helmet>
 
       <div className="h-full p-4 md:p-6 space-y-6 max-w-[1920px] mx-auto overflow-y-auto">
-         {/* Counters Section */}
          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <CounterCard 
                 id="active" 
@@ -321,9 +378,7 @@ const PriceMovementBotPage = () => {
             />
          </div>
 
-         {/* Main Content Grid - 70/30 split */}
          <div className="grid grid-cols-1 xl:grid-cols-10 gap-6 min-h-[600px]">
-            {/* Chart Section (70% width on large screens) */}
             <div className="xl:col-span-7 h-full flex flex-col">
                 <BotChartGrid 
                     symbols={(previewSymbols && previewSymbols.length > 0) ? previewSymbols : ['BTCUSDT']}
@@ -332,7 +387,6 @@ const PriceMovementBotPage = () => {
                 />
             </div>
 
-            {/* Builder Section (30% width) */}
             <div className="xl:col-span-3 h-full min-h-[500px]">
                 <PriceMovementBotBuilder 
                     templates={templates} 
@@ -343,7 +397,6 @@ const PriceMovementBotPage = () => {
             </div>
          </div>
 
-         {/* Active Positions Table */}
          <div className="min-h-[300px]">
              <ActivePositionsTablePriceMovement 
                 positions={filteredPositions} 
@@ -351,6 +404,7 @@ const PriceMovementBotPage = () => {
                 onClosePosition={handleClosePosition}
                 onDeletePosition={handleDeletePosition}
                 onViewHistory={handleViewHistory}
+                bots={bots} // Passing bots for cooldown lookup
              />
          </div>
       </div>

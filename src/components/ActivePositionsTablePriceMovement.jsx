@@ -169,7 +169,7 @@ const ActivePositionsTablePriceMovement = ({
                 <th className="px-6 py-4">Bot / Source</th>
                 <th className="px-6 py-4">Position</th>
                 <th className="px-6 py-4">Prices</th>
-                <th className="px-6 py-4 text-center">TP/SL</th>
+                <th className="px-6 py-4 text-center">SL / TP</th>
                 <th className="px-6 py-4 text-center">Status</th>
                 <th className="px-6 py-4 w-[20%]">Progress</th>
                 <th className="px-6 py-4 text-right">Unrealized PnL</th>
@@ -279,9 +279,9 @@ const ActivePositionsTablePriceMovement = ({
                       <td className="px-6 py-4 text-center">
                         <div className="text-sm font-medium space-y-1.5">
                           <div className="flex justify-between items-center">
-                            <span className={"text-red-400"}>{pos?.stopLossAmount ?? '-'}</span>
+                            <span className={"text-red-400"}>{pos?.stopLossAmount ? '$'+pos?.stopLossAmount : '-'}</span>
                             /
-                            <span className={"text-green-400"}>{pos?.takeProfitAmount ?? '-'}</span>
+                            <span className={"text-green-400"}>{pos?.takeProfitAmount ? '$'+pos?.takeProfitAmount : '-'}</span>
                           </div>
                         </div>
                       </td>
