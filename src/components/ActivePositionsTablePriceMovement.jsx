@@ -169,6 +169,7 @@ const ActivePositionsTablePriceMovement = ({
                 <th className="px-6 py-4">Bot / Source</th>
                 <th className="px-6 py-4">Position</th>
                 <th className="px-6 py-4">Prices</th>
+                <th className="px-6 py-4 text-center">TP/SL</th>
                 <th className="px-6 py-4 text-center">Status</th>
                 <th className="px-6 py-4 w-[20%]">Progress</th>
                 <th className="px-6 py-4 text-right">Unrealized PnL</th>
@@ -270,6 +271,16 @@ const ActivePositionsTablePriceMovement = ({
                               )}>
                                   ${parseFloat(pos.currentPrice || 0).toLocaleString()}
                               </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* TP / SL */}
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col gap-1 text-xs">
+                          <div className="flex justify-between w-32">
+                              <span className="text-red-500">SL</span>
+                              <span className="text-green-500">TP</span>
                           </div>
                         </div>
                       </td>

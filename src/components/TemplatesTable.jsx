@@ -220,7 +220,7 @@ const TemplatesTable = ({ templates = [], onEdit, onDelete, onUpdateTemplates, f
                 <th className="px-6 py-4">Account</th>
                 <th className="px-6 py-4">Symbols & Price</th>
                 <th className="px-6 py-4">Positions</th>
-                <th className="px-6 py-4">Risk Mgmt</th>
+                <th className="px-6 py-4 text-center">SL / TP</th>
                 <th className="px-6 py-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -260,6 +260,7 @@ const TemplatesTable = ({ templates = [], onEdit, onDelete, onUpdateTemplates, f
                                 {isSelected ? <CheckSquare size={16} className="text-blue-500" /> : <Square size={16} />}
                             </button>
                         </td>
+                        
                         <td className="px-6 py-4">
                           <div className="font-bold text-white text-base mb-1">{template.name}</div>
                           <span className={cn(
@@ -273,6 +274,7 @@ const TemplatesTable = ({ templates = [], onEdit, onDelete, onUpdateTemplates, f
                             {template.status || 'Direct Activate'}
                           </span>
                         </td>
+                        
                         <td className="px-6 py-4">
                             <div className="flex items-center gap-2 text-sm text-gray-300">
                                 <Wallet size={14} className="text-gray-500" />
@@ -281,6 +283,7 @@ const TemplatesTable = ({ templates = [], onEdit, onDelete, onUpdateTemplates, f
                                 </span>
                             </div>
                         </td>
+                        
                         <td className="px-6 py-4">
                           <div className="flex flex-col gap-1.5 max-w-[250px]">
                             {template.symbols.slice(0, 3).map(s => (
@@ -314,18 +317,16 @@ const TemplatesTable = ({ templates = [], onEdit, onDelete, onUpdateTemplates, f
                            </div>
                         </td>
                         
-                        <td className="px-6 py-4">
+                        <td className="px-6 py-4 text-center">
                           <div className="text-sm font-medium space-y-1.5">
-                            <div className="flex justify-between w-32 items-center">
-                              <span className="text-gray-500 text-xs uppercase font-bold">TP</span>
-                              <span className={cn("font-mono font-medium", tpDisplay.type === 'none' ? "text-gray-600" : "text-green-400")}>{tpDisplay.text}</span>
-                            </div>
-                            <div className="flex justify-between w-32 items-center">
-                              <span className="text-gray-500 text-xs uppercase font-bold">SL</span>
+                            <div className="flex justify-between items-center">
                               <span className={cn("font-mono font-medium", slDisplay.type === 'none' ? "text-gray-600" : "text-red-400")}>{slDisplay.text}</span>
+                              /
+                              <span className={cn("font-mono font-medium", tpDisplay.type === 'none' ? "text-gray-600" : "text-green-400")}>{tpDisplay.text}</span>
                             </div>
                           </div>
                         </td>
+                        
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                             {!template.deleted && (
