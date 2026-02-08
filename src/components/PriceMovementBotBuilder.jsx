@@ -131,8 +131,8 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
     const initialPositions = activeCoins.map(symbol => {
         const entryPrice = 0; // Updated later
         const dollarTarget = parseFloat(formData.dollarMovement);
-        const margin = dollarTarget; 
-
+        const margin = dollarTarget;
+        
         return {
             id: uuidv4(),
             botId: botConfig.id,
@@ -150,6 +150,8 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
             unrealizedPnl: 0,
             pnlPercentage: 0,
             priceChangePercent: 0,
+            stopLossAmount: selectedTemplate?.stopLossAmount,
+            takeProfitAmount: selectedTemplate?.takeProfitAmount,
             createdAt: new Date().toISOString()
         };
     });
@@ -416,7 +418,7 @@ const PriceMovementBotBuilder = ({ templates: propTemplates, onCreateBot, onPrev
             )}
           >
              <Zap size={20} className="fill-current" />
-             <span>{(!mappingValid || activeCoins.length === 0) ? 'Invalid Configuration' : 'Create Bot'}</span>
+             <span>{(!mappingValid || activeCoins.length === 0) ? 'Invalid Configuration' : 'Create Bot.'}</span>
           </motion.button>
        </form>
     </div>

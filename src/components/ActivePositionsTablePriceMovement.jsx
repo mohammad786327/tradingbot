@@ -276,11 +276,12 @@ const ActivePositionsTablePriceMovement = ({
                       </td>
 
                       {/* TP / SL */}
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col gap-1 text-xs">
-                          <div className="flex justify-between w-32">
-                              <span className="text-red-500">SL</span>
-                              <span className="text-green-500">TP</span>
+                      <td className="px-6 py-4 text-center">
+                        <div className="text-sm font-medium space-y-1.5">
+                          <div className="flex justify-between items-center">
+                            <span className={"text-red-400"}>{pos?.stopLossAmount ?? '-'}</span>
+                            /
+                            <span className={"text-green-400"}>{pos?.takeProfitAmount ?? '-'}</span>
                           </div>
                         </div>
                       </td>
