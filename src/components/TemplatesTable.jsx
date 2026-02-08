@@ -320,9 +320,9 @@ const TemplatesTable = ({ templates = [], onEdit, onDelete, onUpdateTemplates, f
                         <td className="px-6 py-4 text-center">
                           <div className="text-sm font-medium space-y-1.5">
                             <div className="flex justify-between items-center">
-                              <span className={cn("font-mono font-medium", slDisplay.type === 'none' ? "text-gray-600" : "text-red-400")}>{slDisplay.text}</span>
+                              <span className={cn("font-mono font-medium", slDisplay.type === 'none' ? "text-gray-600" : "text-red-400")}>{slDisplay.text ?? '-'}</span>
                               /
-                              <span className={cn("font-mono font-medium", tpDisplay.type === 'none' ? "text-gray-600" : "text-green-400")}>{tpDisplay.text}</span>
+                              <span className={cn("font-mono font-medium", tpDisplay.type === 'none' ? "text-gray-600" : "text-green-400")}>{tpDisplay.text ?? '-'}</span>
                             </div>
                           </div>
                         </td>
